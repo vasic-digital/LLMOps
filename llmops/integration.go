@@ -3,6 +3,7 @@ package llmops
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -167,13 +168,18 @@ func (s *LLMOpsSystem) GetAlertManager() AlertManager {
 	return s.alertManager
 }
 
-// CreatePromptExperiment creates an A/B test for prompts
+// CreatePromptExperiment creates an A/B test for prompts.
+// Idempotent on prompt registration: if the caller pre-registered the prompts
+// (e.g. to run verification before starting the experiment), a duplicate Create
+// here is treated as a no-op rather than a hard error. Only genuinely different
+// versions at the same (name,version) pair would still fail, but that is a
+// caller bug we surface via the registry's error.
 func (s *LLMOpsSystem) CreatePromptExperiment(ctx context.Context, name string, controlPrompt, treatmentPrompt *PromptVersion, trafficSplit float64) (*Experiment, error) {
-	// Create prompt versions
-	if err := s.promptRegistry.Create(ctx, controlPrompt); err != nil {
+	// Create prompt versions (tolerate already-exists from idempotent callers)
+	if err := s.promptRegistry.Create(ctx, controlPrompt); err != nil && !strings.Contains(err.Error(), "already exists") {
 		return nil, fmt.Errorf("failed to create control prompt: %w", err)
 	}
-	if err := s.promptRegistry.Create(ctx, treatmentPrompt); err != nil {
+	if err := s.promptRegistry.Create(ctx, treatmentPrompt); err != nil && !strings.Contains(err.Error(), "already exists") {
 		return nil, fmt.Errorf("failed to create treatment prompt: %w", err)
 	}
 
