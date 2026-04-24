@@ -19,7 +19,7 @@ func init() {
 
 func TestConcurrentEvaluationRunCreation_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 75
@@ -57,7 +57,7 @@ func TestConcurrentEvaluationRunCreation_Stress(t *testing.T) {
 
 func TestConcurrentExperimentCreation_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 60
@@ -92,7 +92,7 @@ func TestConcurrentExperimentCreation_Stress(t *testing.T) {
 
 func TestConcurrentExperimentLifecycle_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 50
@@ -144,7 +144,7 @@ func TestConcurrentExperimentLifecycle_Stress(t *testing.T) {
 
 func TestConcurrentPromptOperations_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 80
@@ -184,7 +184,7 @@ func TestConcurrentPromptOperations_Stress(t *testing.T) {
 
 func TestConcurrentAlertCreation_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 100
@@ -221,7 +221,7 @@ func TestConcurrentAlertCreation_Stress(t *testing.T) {
 
 func TestConcurrentMetricRecording_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 100
@@ -271,7 +271,7 @@ func TestConcurrentMetricRecording_Stress(t *testing.T) {
 
 func TestConcurrentDatasetOperations_Stress(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping stress test in short mode")
+		t.Skip("skipping stress test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	const goroutines = 60

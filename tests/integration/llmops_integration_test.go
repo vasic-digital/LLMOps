@@ -16,7 +16,7 @@ func init() {
 
 func TestEvaluatorAndDatasetIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	evaluator := llmops.NewInMemoryContinuousEvaluator(nil, nil, nil, nil)
@@ -57,7 +57,7 @@ func TestEvaluatorAndDatasetIntegration(t *testing.T) {
 
 func TestExperimentLifecycleIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	mgr := llmops.NewInMemoryExperimentManager(nil)
@@ -101,7 +101,7 @@ func TestExperimentLifecycleIntegration(t *testing.T) {
 
 func TestPromptRegistryAndEvaluatorIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	registry := llmops.NewInMemoryPromptRegistry(nil)
@@ -146,7 +146,7 @@ func TestPromptRegistryAndEvaluatorIntegration(t *testing.T) {
 
 func TestAlertManagerIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	alertMgr := llmops.NewInMemoryAlertManager(nil)
@@ -197,7 +197,7 @@ func TestAlertManagerIntegration(t *testing.T) {
 
 func TestExperimentPauseAndResumeIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	mgr := llmops.NewInMemoryExperimentManager(nil)

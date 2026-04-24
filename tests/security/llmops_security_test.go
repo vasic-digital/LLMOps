@@ -12,7 +12,7 @@ import (
 
 func TestPromptRegistryEmptyInputs_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	reg := llmops.NewInMemoryPromptRegistry(nil)
@@ -36,7 +36,7 @@ func TestPromptRegistryEmptyInputs_Security(t *testing.T) {
 
 func TestPromptRegistryDuplicateVersion_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	reg := llmops.NewInMemoryPromptRegistry(nil)
@@ -55,7 +55,7 @@ func TestPromptRegistryDuplicateVersion_Security(t *testing.T) {
 
 func TestPromptRegistryDeleteActiveVersion_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	reg := llmops.NewInMemoryPromptRegistry(nil)
@@ -72,7 +72,7 @@ func TestPromptRegistryDeleteActiveVersion_Security(t *testing.T) {
 
 func TestPromptRenderMissingRequiredVariable_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	reg := llmops.NewInMemoryPromptRegistry(nil)
@@ -92,7 +92,7 @@ func TestPromptRenderMissingRequiredVariable_Security(t *testing.T) {
 
 func TestExperimentManagerInsufficientVariants_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	mgr := llmops.NewInMemoryExperimentManager(nil)
@@ -113,7 +113,7 @@ func TestExperimentManagerInsufficientVariants_Security(t *testing.T) {
 
 func TestExperimentInvalidStateTransitions_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	mgr := llmops.NewInMemoryExperimentManager(nil)
@@ -146,7 +146,7 @@ func TestExperimentInvalidStateTransitions_Security(t *testing.T) {
 
 func TestExperimentNonexistentLookup_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	mgr := llmops.NewInMemoryExperimentManager(nil)
@@ -165,7 +165,7 @@ func TestExperimentNonexistentLookup_Security(t *testing.T) {
 
 func TestEvaluatorRunRequiresDataset_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	eval := llmops.NewInMemoryContinuousEvaluator(nil, nil, nil, nil)
@@ -189,7 +189,7 @@ func TestEvaluatorRunRequiresDataset_Security(t *testing.T) {
 
 func TestPromptInjectionResistance_Security(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping security test in short mode")
+		t.Skip("skipping security test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	reg := llmops.NewInMemoryPromptRegistry(nil)

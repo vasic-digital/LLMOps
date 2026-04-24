@@ -18,7 +18,7 @@ func init() {
 
 func TestFullEvaluationWorkflow_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	// Initialize the full system
@@ -75,7 +75,7 @@ func TestFullEvaluationWorkflow_E2E(t *testing.T) {
 
 func TestFullExperimentWorkflow_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	system := llmops.NewLLMOpsSystem(nil, nil)
@@ -151,7 +151,7 @@ func TestFullExperimentWorkflow_E2E(t *testing.T) {
 
 func TestModelExperimentWorkflow_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	system := llmops.NewLLMOpsSystem(nil, nil)
@@ -173,7 +173,7 @@ func TestModelExperimentWorkflow_E2E(t *testing.T) {
 
 func TestDefaultLLMOpsConfig_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	cfg := llmops.DefaultLLMOpsConfig()
@@ -186,7 +186,7 @@ func TestDefaultLLMOpsConfig_E2E(t *testing.T) {
 
 func TestPromptVersionComparison_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	registry := llmops.NewInMemoryPromptRegistry(nil)
@@ -225,7 +225,7 @@ func TestPromptVersionComparison_E2E(t *testing.T) {
 
 func TestVerifierIntegration_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	scores := map[string]float64{
@@ -254,7 +254,7 @@ func TestVerifierIntegration_E2E(t *testing.T) {
 
 func TestEvaluationRunListWithFilter_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
+		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
 	}
 
 	evaluator := llmops.NewInMemoryContinuousEvaluator(nil, nil, nil, nil)
