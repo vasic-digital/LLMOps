@@ -202,6 +202,16 @@ func BenchmarkExperimentGetResults(b *testing.B) {
 	}
 }
 
+// BenchmarkDatasetCreate / BenchmarkDatasetAddSamples / BenchmarkEvaluationRunCreate
+// exercise ONLY the metadata-layer surface of the evaluator (CreateDataset
+// / AddSamples / CreateRun). Per round-25 §11.4 audit (2026-05-17,
+// CONST-035 / Article XI §11.9 / CONST-050(A)): the nil-LLMEvaluator
+// argument is honest here because none of these benchmarks call StartRun,
+// so the §11.4 PASS-bluff (simulated response + fabricated 0.8 score)
+// removed in evaluator.go is not triggered. If a future revision extends
+// these benchmarks to invoke StartRun, a real LLM responder + evaluator
+// MUST be wired in per CONST-050(A) — bench results that include
+// fabricated evaluation work would be a CRITICAL bluff.
 func BenchmarkDatasetCreate(b *testing.B) {
 	if testing.Short() {
 		b.Skip("skipping benchmark in short mode")

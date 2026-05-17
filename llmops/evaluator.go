@@ -2,6 +2,7 @@ package llmops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -16,6 +17,54 @@ type LLMEvaluator interface {
 	Evaluate(ctx context.Context, prompt, response, expected string, metrics []string) (map[string]float64, error)
 }
 
+// LLMResponder is the contract InMemoryContinuousEvaluator uses to obtain a
+// real LLM-generated response for a dataset sample BEFORE that response is
+// passed to the LLMEvaluator for scoring. Callers MUST wire a real
+// implementation via SetResponder (or an equivalent dependency-injection
+// path) before invoking StartRun — otherwise evaluateSample returns
+// ErrLLMResponderNotConfigured rather than the previous simulated string.
+//
+// Returning a non-nil error from Generate causes the sample to be marked
+// FAILED with the error captured in SampleResult.Error; the scoring step
+// is skipped for that sample.
+type LLMResponder interface {
+	Generate(ctx context.Context, prompt string) (string, error)
+}
+
+// LLMResponderFunc adapts a plain function to LLMResponder for ergonomic
+// injection in tests and integration wiring.
+type LLMResponderFunc func(ctx context.Context, prompt string) (string, error)
+
+// Generate satisfies LLMResponder for LLMResponderFunc.
+func (f LLMResponderFunc) Generate(ctx context.Context, prompt string) (string, error) {
+	return f(ctx, prompt)
+}
+
+// ErrLLMResponderNotConfigured is returned by evaluateSample when no real
+// LLMResponder has been wired into the evaluator. The previous default
+// fabricated a literal "simulated response" string and fed it to the
+// LLMEvaluator, producing meaningless scores that nevertheless surfaced
+// as PASS results — §11.4 PASS-bluff at the production-default layer
+// (CRITICAL per CONST-035 / Article XI §11.9, audit round 25, 2026-05-17).
+// Wire a real LLM provider via (*InMemoryContinuousEvaluator).SetResponder
+// before invoking StartRun.
+var ErrLLMResponderNotConfigured = errors.New(
+	"llmops: LLM responder has not been wired into the evaluator — call (*InMemoryContinuousEvaluator).SetResponder with a real LLM-dispatching responder before invoking StartRun (the previous default fabricated a 'simulated response' string and evaluated against it; §11.4 PASS-bluff removed)",
+)
+
+// ErrEvaluatorNotConfigured is returned by evaluateSample when no
+// LLMEvaluator has been wired into the InMemoryContinuousEvaluator.
+// The previous default fabricated a PASS result with a 0.8 placeholder
+// score for every requested metric, which surfaced as a successful
+// evaluation run despite zero real scoring having occurred — §11.4
+// PASS-bluff at the production-default layer (CRITICAL per CONST-035 /
+// Article XI §11.9, audit round 25, 2026-05-17). Pass a non-nil
+// LLMEvaluator to NewInMemoryContinuousEvaluator (or to NewLLMOpsSystem
+// via SetDebateEvaluator) before invoking StartRun.
+var ErrEvaluatorNotConfigured = errors.New(
+	"llmops: LLM evaluator has not been wired into the InMemoryContinuousEvaluator — construct it with a non-nil LLMEvaluator (or call SetDebateEvaluator on LLMOpsSystem) before invoking StartRun (the previous default fabricated PASS with a 0.8 placeholder score per metric; §11.4 PASS-bluff removed)",
+)
+
 // InMemoryContinuousEvaluator implements ContinuousEvaluator
 type InMemoryContinuousEvaluator struct {
 	runs         map[string]*EvaluationRun
@@ -23,6 +72,7 @@ type InMemoryContinuousEvaluator struct {
 	samples      map[string][]*DatasetSample // dataset ID -> samples
 	schedules    map[string]*schedule
 	evaluator    LLMEvaluator
+	responder    LLMResponder
 	registry     PromptRegistry
 	mu           sync.RWMutex
 	logger       *logrus.Logger
@@ -36,7 +86,18 @@ type schedule struct {
 	stopCh  chan struct{}
 }
 
-// NewInMemoryContinuousEvaluator creates a new continuous evaluator
+// NewInMemoryContinuousEvaluator creates a new continuous evaluator.
+//
+// Callers that pass a non-nil LLMEvaluator MUST also wire a real
+// LLMResponder via SetResponder before invoking StartRun. Without a
+// wired responder, evaluateSample returns ErrLLMResponderNotConfigured
+// (previously it fabricated the literal string "simulated response" —
+// §11.4 PASS-bluff removed, audit round 25, 2026-05-17).
+//
+// Callers that pass a nil LLMEvaluator will receive
+// ErrEvaluatorNotConfigured from evaluateSample for every sample
+// (previously a fake PASS with placeholder 0.8 score per metric was
+// fabricated — §11.4 PASS-bluff removed in the same audit round).
 func NewInMemoryContinuousEvaluator(evaluator LLMEvaluator, registry PromptRegistry, alertManager AlertManager, logger *logrus.Logger) *InMemoryContinuousEvaluator {
 	if logger == nil {
 		logger = logrus.New()
@@ -51,6 +112,21 @@ func NewInMemoryContinuousEvaluator(evaluator LLMEvaluator, registry PromptRegis
 		alertManager: alertManager,
 		logger:       logger,
 	}
+}
+
+// SetResponder wires the real LLMResponder used by evaluateSample to
+// produce a model response for each dataset sample. Passing a nil
+// responder is a no-op (the evaluator continues to return
+// ErrLLMResponderNotConfigured from evaluateSample when the LLMEvaluator
+// is non-nil). Safe to call concurrently with other methods — guarded
+// by the same RW mutex that protects runs / datasets.
+func (e *InMemoryContinuousEvaluator) SetResponder(r LLMResponder) {
+	if r == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.responder = r
 }
 
 // CreateRun creates a new evaluation run
@@ -215,48 +291,81 @@ func (e *InMemoryContinuousEvaluator) evaluateSample(ctx context.Context, run *E
 		Scores: make(map[string]float64),
 	}
 
-	// In a real implementation, this would:
-	// 1. Render the prompt with the sample input
-	// 2. Call the LLM with the prompt
-	// 3. Evaluate the response
-
 	if sample.ExpectedOutput != "" {
 		result.Expected = sample.ExpectedOutput
 	}
 
-	// Use LLM evaluator if available
-	if e.evaluator != nil {
-		// Simulated response for evaluation
-		response := "simulated response"
-		result.Actual = response
+	// Snapshot the injected dependencies under the lock so concurrent
+	// SetResponder / constructor mutations cannot race with the read.
+	e.mu.RLock()
+	evaluator := e.evaluator
+	responder := e.responder
+	e.mu.RUnlock()
 
-		scores, err := e.evaluator.Evaluate(ctx, sample.Input, response, sample.ExpectedOutput, run.Metrics)
-		if err != nil {
-			result.Error = err.Error()
+	// CONST-035 / Article XI §11.9 anti-bluff: without a real LLMEvaluator
+	// wired in, the function MUST NOT fabricate a PASS — previously it
+	// returned Passed=true with a 0.8 placeholder score per metric, which
+	// surfaced as a meaningful evaluation result despite zero real
+	// scoring having occurred. Round-25 §11.4 audit (2026-05-17) removes
+	// that bluff: the sample is marked FAILED with ErrEvaluatorNotConfigured
+	// so the absence of coverage is loud rather than silent.
+	if evaluator == nil {
+		result.Error = ErrEvaluatorNotConfigured.Error()
+		result.Passed = false
+		result.Latency = time.Since(start)
+		return result
+	}
+
+	// CONST-035 / Article XI §11.9 anti-bluff: without a real LLMResponder
+	// wired in, the function MUST NOT fabricate the literal "simulated
+	// response" string and feed it to the LLMEvaluator — that produced
+	// meaningless scores presented as if they had assessed a real model
+	// response. Round-25 §11.4 audit (2026-05-17) removes that bluff:
+	// the sample is marked FAILED with ErrLLMResponderNotConfigured.
+	// Render the prompt template with the sample input when available;
+	// otherwise the raw sample input is what the LLM sees.
+	if responder == nil {
+		result.Error = ErrLLMResponderNotConfigured.Error()
+		result.Passed = false
+		result.Latency = time.Since(start)
+		return result
+	}
+
+	// Compose the LLM input: prefer the rendered prompt template when the
+	// run was configured with one, otherwise pass the raw sample input.
+	llmPrompt := sample.Input
+	if promptTemplate != "" {
+		llmPrompt = promptTemplate + "\n\n" + sample.Input
+	}
+
+	response, err := responder.Generate(ctx, llmPrompt)
+	if err != nil {
+		result.Error = fmt.Errorf("llmops: LLM responder Generate failed: %w", err).Error()
+		result.Passed = false
+		result.Latency = time.Since(start)
+		return result
+	}
+	result.Actual = response
+
+	scores, err := evaluator.Evaluate(ctx, sample.Input, response, sample.ExpectedOutput, run.Metrics)
+	if err != nil {
+		result.Error = err.Error()
+		result.Passed = false
+		result.Latency = time.Since(start)
+		return result
+	}
+	result.Scores = scores
+
+	// All requested metrics must clear the 0.7 floor for the sample to PASS.
+	result.Passed = true
+	for _, score := range scores {
+		if score < 0.7 {
 			result.Passed = false
-		} else {
-			result.Scores = scores
-
-			// Check if all metrics pass threshold (0.7)
-			result.Passed = true
-			for _, score := range scores {
-				if score < 0.7 {
-					result.Passed = false
-					break
-				}
-			}
-		}
-	} else {
-		// Simple heuristic evaluation
-		result.Actual = "evaluated"
-		result.Passed = true
-		for _, metric := range run.Metrics {
-			result.Scores[metric] = 0.8 // Placeholder
+			break
 		}
 	}
 
 	result.Latency = time.Since(start)
-
 	return result
 }
 

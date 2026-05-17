@@ -252,9 +252,19 @@ func TestVerifierIntegration_E2E(t *testing.T) {
 	assert.Equal(t, 0.9, score)
 }
 
+// TestEvaluationRunListWithFilter_E2E exercises the run-listing/filter
+// surface of the evaluator. This test only TOUCHES the metadata layer
+// (CreateRun + ListRuns) and never invokes StartRun, so the §11.4
+// PASS-bluff removed in round-25 audit (2026-05-17, CONST-035 /
+// Article XI §11.9 / CONST-050(A)) is not triggered here — the
+// evaluator only stores run records, it never fabricates evaluation
+// results. The remaining nil-LLMEvaluator argument is honest for this
+// scope: no evaluation actually runs, so no fake score is fabricated.
+// If this test is ever extended to call StartRun, a real LLM responder
+// + evaluator MUST be wired in per CONST-050(A).
 func TestEvaluationRunListWithFilter_E2E(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")  // SKIP-OK: #short-mode
+		t.Skip("skipping e2e test in short mode") // SKIP-OK: #short-mode
 	}
 
 	evaluator := llmops.NewInMemoryContinuousEvaluator(nil, nil, nil, nil)
@@ -274,7 +284,7 @@ func TestEvaluationRunListWithFilter_E2E(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// List with filter
+	// List with filter — metadata-only assertion, no fabricated scores.
 	runs, err := evaluator.ListRuns(context.Background(), &llmops.EvaluationFilter{
 		ModelName: "test-model",
 		Limit:     3,

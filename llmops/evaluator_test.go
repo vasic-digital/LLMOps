@@ -2,6 +2,7 @@ package llmops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -12,6 +13,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// echoResponder is a deterministic stand-in installed via SetResponder by
+// every evaluator unit test that exercises the StartRun -> evaluateSample
+// pipeline. It is permitted under CONST-050(A) because it lives in a
+// *_test.go file invoked WITHOUT the integration build tag — unit-test
+// territory. Production code MUST NOT install this responder; production
+// callers MUST wire a real LLM-dispatching responder per CONST-035 /
+// Article XI §11.9 (see ErrLLMResponderNotConfigured for the contract).
+type echoResponder struct {
+	err error
+}
+
+func (r *echoResponder) Generate(_ context.Context, prompt string) (string, error) {
+	if r.err != nil {
+		return "", r.err
+	}
+	return "echo:" + prompt, nil
+}
 
 func init() {
 	runtime.GOMAXPROCS(2)
@@ -541,6 +560,7 @@ func TestInMemoryContinuousEvaluator_ListRuns_ReturnsCopies(t *testing.T) {
 func TestInMemoryContinuousEvaluator_ExecuteRun_WithLLMEvaluator_AllPass(t *testing.T) {
 	llmEval := &mockLLMEvaluator{scores: map[string]float64{"accuracy": 0.9, "relevance": 0.85}}
 	eval := newTestEvaluator(llmEval, nil)
+	eval.SetResponder(&echoResponder{}) // unit-test stand-in per CONST-050(A)
 	ctx := context.Background()
 	createTestDataset(t, eval, "ds1", "test-ds", defaultSamples())
 
@@ -567,6 +587,7 @@ func TestInMemoryContinuousEvaluator_ExecuteRun_WithLLMEvaluator_SomeFail(t *tes
 	// Scores below 0.7 threshold cause failure
 	llmEval := &mockLLMEvaluator{scores: map[string]float64{"accuracy": 0.5}}
 	eval := newTestEvaluator(llmEval, nil)
+	eval.SetResponder(&echoResponder{}) // unit-test stand-in per CONST-050(A)
 	ctx := context.Background()
 	createTestDataset(t, eval, "ds1", "test-ds", defaultSamples())
 
@@ -588,6 +609,7 @@ func TestInMemoryContinuousEvaluator_ExecuteRun_WithLLMEvaluator_SomeFail(t *tes
 func TestInMemoryContinuousEvaluator_ExecuteRun_WithLLMEvaluator_Error(t *testing.T) {
 	llmEval := &mockLLMEvaluator{err: fmt.Errorf("evaluation failed")}
 	eval := newTestEvaluator(llmEval, nil)
+	eval.SetResponder(&echoResponder{}) // unit-test stand-in per CONST-050(A)
 	ctx := context.Background()
 	createTestDataset(t, eval, "ds1", "test-ds", defaultSamples())
 
@@ -606,6 +628,14 @@ func TestInMemoryContinuousEvaluator_ExecuteRun_WithLLMEvaluator_Error(t *testin
 	assert.Contains(t, got.Results.FailureReasons, "evaluation failed")
 }
 
+// TestInMemoryContinuousEvaluator_ExecuteRun_WithoutEvaluator asserts the
+// round-25 §11.4 audit (2026-05-17) anti-bluff contract: when no
+// LLMEvaluator is wired in, every sample MUST FAIL with
+// ErrEvaluatorNotConfigured surfaced in Results.FailureReasons. The
+// previous behaviour fabricated a PASS with a 0.8 placeholder score for
+// every metric — a CRITICAL §11.4 PASS-bluff at the production-default
+// layer (CONST-035 / Article XI §11.9). DO NOT relax this assertion
+// without re-reading the audit notes attached to the round-25 commit.
 func TestInMemoryContinuousEvaluator_ExecuteRun_WithoutEvaluator(t *testing.T) {
 	eval := newTestEvaluator(nil, nil) // no LLM evaluator
 	ctx := context.Background()
@@ -622,10 +652,111 @@ func TestInMemoryContinuousEvaluator_ExecuteRun_WithoutEvaluator(t *testing.T) {
 
 	got, _ := eval.GetRun(ctx, "run1")
 	require.NotNil(t, got.Results)
-	assert.Equal(t, 3, got.Results.PassedSamples, "heuristic eval always passes")
-	assert.InDelta(t, 1.0, got.Results.PassRate, 0.001)
-	// Heuristic eval assigns 0.8 for all metrics
-	assert.InDelta(t, 0.8, got.Results.MetricScores["accuracy"], 0.001)
+	assert.Equal(t, 0, got.Results.PassedSamples,
+		"no LLMEvaluator wired => every sample must FAIL (§11.4 anti-bluff)")
+	assert.Equal(t, 3, got.Results.FailedSamples,
+		"all 3 dataset samples must surface as failures")
+	assert.InDelta(t, 0.0, got.Results.PassRate, 0.001)
+	assert.Contains(t, got.Results.FailureReasons, ErrEvaluatorNotConfigured.Error(),
+		"failure reason must be the sentinel — no fabricated heuristic score")
+	// No score must be present — the previous 0.8 placeholder is forbidden.
+	assert.Empty(t, got.Results.MetricScores["accuracy"],
+		"MetricScores must NOT contain a placeholder score for an unwired evaluator")
+}
+
+// TestInMemoryContinuousEvaluator_ExecuteRun_WithEvaluatorButNoResponder
+// is the second half of the round-25 §11.4 audit (2026-05-17): when a
+// real LLMEvaluator IS wired but no LLMResponder is, the function MUST
+// NOT fabricate the literal "simulated response" string and feed it to
+// the evaluator. Every sample MUST FAIL with
+// ErrLLMResponderNotConfigured surfaced in Results.FailureReasons.
+// Regression-immunity test for finding #1 of the audit.
+func TestInMemoryContinuousEvaluator_ExecuteRun_WithEvaluatorButNoResponder(t *testing.T) {
+	llmEval := &mockLLMEvaluator{scores: map[string]float64{"accuracy": 0.9}}
+	eval := newTestEvaluator(llmEval, nil) // LLMEvaluator wired, responder NOT
+	ctx := context.Background()
+	createTestDataset(t, eval, "ds1", "test-ds", defaultSamples())
+
+	run := &EvaluationRun{ID: "run1", Name: "test-run", Dataset: "ds1", Metrics: []string{"accuracy"}}
+	require.NoError(t, eval.CreateRun(ctx, run))
+	require.NoError(t, eval.StartRun(ctx, "run1"))
+
+	require.Eventually(t, func() bool {
+		got, _ := eval.GetRun(ctx, "run1")
+		return got.Status == EvaluationStatusCompleted
+	}, 5*time.Second, 50*time.Millisecond)
+
+	got, _ := eval.GetRun(ctx, "run1")
+	require.NotNil(t, got.Results)
+	assert.Equal(t, 0, got.Results.PassedSamples,
+		"no LLMResponder wired => every sample must FAIL (§11.4 anti-bluff)")
+	assert.Equal(t, 3, got.Results.FailedSamples,
+		"all 3 dataset samples must surface as failures")
+	assert.Contains(t, got.Results.FailureReasons, ErrLLMResponderNotConfigured.Error(),
+		"failure reason must be the sentinel — no fabricated simulated-response string")
+	// SampleResult.Actual must NOT contain the forbidden bluff string.
+	for _, sr := range got.Results.SampleResults {
+		assert.NotEqual(t, "simulated response", sr.Actual,
+			"the literal 'simulated response' bluff string MUST never appear")
+		assert.NotEqual(t, "evaluated", sr.Actual,
+			"the literal 'evaluated' bluff string MUST never appear")
+	}
+}
+
+// TestEvaluateSample_SentinelErrorsAreSentinels is the regression-immunity
+// test that asserts the sentinel errors created in round-25 §11.4 audit
+// (2026-05-17) ARE the very ones evaluateSample reports — preventing the
+// fabricated-string approach from being silently re-introduced by any
+// future commit that thinks it knows better. errors.Is is the
+// idiomatic Go check for sentinel-error identity.
+func TestEvaluateSample_SentinelErrorsAreSentinels(t *testing.T) {
+	// Sub-test 1: no evaluator => ErrEvaluatorNotConfigured surfaced verbatim.
+	eval1 := newTestEvaluator(nil, nil)
+	createTestDataset(t, eval1, "ds1", "test-ds", []*DatasetSample{{ID: "s1", Input: "hi"}})
+	run1 := &EvaluationRun{ID: "r1", Name: "t", Dataset: "ds1", Metrics: []string{"acc"}}
+	require.NoError(t, eval1.CreateRun(context.Background(), run1))
+	res1 := eval1.evaluateSample(context.Background(), run1, &DatasetSample{ID: "s1", Input: "hi"}, "")
+	require.False(t, res1.Passed)
+	// errors.Is across the string boundary: we can't use errors.Is because the
+	// SampleResult.Error field stores the string form. Verify by string equality
+	// against the canonical sentinel's Error() form — that string IS the
+	// public contract callers can match on.
+	assert.Equal(t, ErrEvaluatorNotConfigured.Error(), res1.Error,
+		"SampleResult.Error MUST equal ErrEvaluatorNotConfigured.Error() verbatim")
+
+	// Sub-test 2: evaluator but no responder => ErrLLMResponderNotConfigured.
+	eval2 := newTestEvaluator(&mockLLMEvaluator{scores: map[string]float64{"acc": 0.9}}, nil)
+	createTestDataset(t, eval2, "ds2", "test-ds", []*DatasetSample{{ID: "s2", Input: "hi"}})
+	run2 := &EvaluationRun{ID: "r2", Name: "t", Dataset: "ds2", Metrics: []string{"acc"}}
+	require.NoError(t, eval2.CreateRun(context.Background(), run2))
+	res2 := eval2.evaluateSample(context.Background(), run2, &DatasetSample{ID: "s2", Input: "hi"}, "")
+	require.False(t, res2.Passed)
+	assert.Equal(t, ErrLLMResponderNotConfigured.Error(), res2.Error,
+		"SampleResult.Error MUST equal ErrLLMResponderNotConfigured.Error() verbatim")
+
+	// Sub-test 3: errors.Is identity holds at the package level — proves the
+	// sentinels are real sentinels (not just any error with that message).
+	assert.True(t, errors.Is(ErrEvaluatorNotConfigured, ErrEvaluatorNotConfigured))
+	assert.True(t, errors.Is(ErrLLMResponderNotConfigured, ErrLLMResponderNotConfigured))
+	assert.False(t, errors.Is(ErrEvaluatorNotConfigured, ErrLLMResponderNotConfigured))
+}
+
+// TestEvaluateSample_ResponderErrorPropagates asserts that real-LLM call
+// failures surface as SampleResult.Error WITHOUT swallowing or
+// rewriting them into a fabricated PASS — the round-25 audit closes the
+// "absence of error implies success" bluff vector.
+func TestEvaluateSample_ResponderErrorPropagates(t *testing.T) {
+	eval := newTestEvaluator(&mockLLMEvaluator{scores: map[string]float64{"acc": 0.9}}, nil)
+	eval.SetResponder(&echoResponder{err: errors.New("backend 503 unavailable")})
+	createTestDataset(t, eval, "ds1", "test-ds", []*DatasetSample{{ID: "s1", Input: "hi"}})
+	run := &EvaluationRun{ID: "r1", Name: "t", Dataset: "ds1", Metrics: []string{"acc"}}
+	require.NoError(t, eval.CreateRun(context.Background(), run))
+	res := eval.evaluateSample(context.Background(), run, &DatasetSample{ID: "s1", Input: "hi"}, "")
+	require.False(t, res.Passed)
+	assert.Contains(t, res.Error, "backend 503 unavailable",
+		"backend error MUST be propagated verbatim — no swallowing")
+	assert.Contains(t, res.Error, "LLM responder Generate failed",
+		"wrapped error message must identify the responder failure layer")
 }
 
 func TestInMemoryContinuousEvaluator_ExecuteRun_EmptyDataset(t *testing.T) {
@@ -753,7 +884,13 @@ func TestInMemoryContinuousEvaluator_CompareRuns_NotCompleted(t *testing.T) {
 }
 
 func TestInMemoryContinuousEvaluator_CompareRuns_WithRegressions(t *testing.T) {
-	eval := newTestEvaluator(nil, nil)
+	// Pre-round-25: this test relied on the no-evaluator bluff fabricating
+	// 0.8 scores for run1. Post-fix, run1 must have a real LLMEvaluator +
+	// LLMResponder wired in (unit-test stand-ins per CONST-050(A)) to
+	// generate genuine scores for comparison.
+	llmEval := &mockLLMEvaluator{scores: map[string]float64{"accuracy": 0.8}}
+	eval := newTestEvaluator(llmEval, nil)
+	eval.SetResponder(&echoResponder{})
 	ctx := context.Background()
 	createTestDataset(t, eval, "ds1", "test-ds", defaultSamples())
 

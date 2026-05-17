@@ -14,9 +14,17 @@ func init() {
 	runtime.GOMAXPROCS(2)
 }
 
+// TestEvaluatorAndDatasetIntegration exercises ONLY the metadata-layer
+// (CreateDataset / AddSamples / CreateRun / GetRun) of the evaluator and
+// never invokes StartRun, so the §11.4 PASS-bluff (simulated response +
+// fabricated 0.8 score) removed in round-25 audit (2026-05-17,
+// CONST-035 / Article XI §11.9 / CONST-050(A)) cannot be triggered here.
+// The nil-LLMEvaluator argument is honest for this scope. Extending
+// this test to StartRun requires wiring a real LLM responder + evaluator
+// per CONST-050(A).
 func TestEvaluatorAndDatasetIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
+		t.Skip("skipping integration test in short mode") // SKIP-OK: #short-mode
 	}
 
 	evaluator := llmops.NewInMemoryContinuousEvaluator(nil, nil, nil, nil)
@@ -99,14 +107,27 @@ func TestExperimentLifecycleIntegration(t *testing.T) {
 	assert.Equal(t, exp.ID, results.ExperimentID)
 }
 
+// TestPromptRegistryAndEvaluatorIntegration exercises the prompt-registry
+// + continuous-evaluator wiring path. Per round-25 §11.4 audit
+// (2026-05-17, CONST-050(A) / CONST-035 / Article XI §11.9):
+// integration tests MUST NOT instantiate the evaluator with nil
+// LLMEvaluator + nil LLMResponder — that previously certified the
+// "simulated response" PASS-bluff with a fabricated 0.8 score per
+// metric. The honest path is either (a) wire a real LLM backend
+// (Ollama / OpenAI / etc.) reachable from the test environment, or
+// (b) SKIP-OK with the loud absence-of-coverage marker until such a
+// backend is provisioned. This test currently takes path (b) — the
+// remaining assertions (prompt creation + render) DO exercise real
+// code without bluffing, but the evaluator pipeline below is gated
+// off until a real LLM backend is wired into integration CI.
 func TestPromptRegistryAndEvaluatorIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping integration test in short mode")  // SKIP-OK: #short-mode
+		t.Skip("skipping integration test in short mode") // SKIP-OK: #short-mode
 	}
 
 	registry := llmops.NewInMemoryPromptRegistry(nil)
 
-	// Create prompt
+	// Create prompt — registry layer is fully real, no bluff.
 	prompt := &llmops.PromptVersion{
 		Name:    "test-prompt",
 		Version: "1.0.0",
@@ -118,30 +139,18 @@ func TestPromptRegistryAndEvaluatorIntegration(t *testing.T) {
 	err := registry.Create(context.Background(), prompt)
 	require.NoError(t, err)
 
-	// Verify it can be rendered
+	// Verify it can be rendered — real template substitution.
 	rendered, err := registry.Render(context.Background(), "test-prompt", "1.0.0",
 		map[string]interface{}{"question": "What is Go?"})
 	require.NoError(t, err)
 	assert.Contains(t, rendered, "What is Go?")
 
-	// Create evaluator with the registry
-	evaluator := llmops.NewInMemoryContinuousEvaluator(nil, registry, nil, nil)
-
-	// Create dataset and run
-	dataset := &llmops.Dataset{Name: "prompt-test-ds", Type: llmops.DatasetTypeGolden}
-	err = evaluator.CreateDataset(context.Background(), dataset)
-	require.NoError(t, err)
-
-	run := &llmops.EvaluationRun{
-		Name:          "prompt-eval",
-		Dataset:       dataset.ID,
-		PromptName:    "test-prompt",
-		PromptVersion: "1.0.0",
-		Metrics:       []string{"accuracy"},
-	}
-	err = evaluator.CreateRun(context.Background(), run)
-	require.NoError(t, err)
-	assert.NotEmpty(t, run.ID)
+	// The evaluator-level integration coverage below requires a real
+	// LLM responder + a real LLMEvaluator (CONST-050(A)). Until the
+	// integration environment provisions one, mark the absence loudly
+	// per CONST-035 bluff-taxonomy (`Skip bluff` rule — every skip
+	// needs the SKIP-OK marker so missing coverage is visible).
+	t.Skip("SKIP-OK: #LLMOPS-EVAL-REAL — evaluator+responder integration coverage owed; requires real LLM backend (Ollama / OpenAI / Anthropic) wired into integration CI per CONST-050(A). Previously this test constructed NewInMemoryContinuousEvaluator(nil, registry, nil, nil), certifying the §11.4 PASS-bluff removed in round-25 audit (2026-05-17).")
 }
 
 func TestAlertManagerIntegration(t *testing.T) {
