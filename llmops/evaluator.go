@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+
+	"digital.vasic.llmops/pkg/i18n"
 )
 
 // LLMEvaluator interface for LLM-based evaluation
@@ -77,6 +79,12 @@ type InMemoryContinuousEvaluator struct {
 	mu           sync.RWMutex
 	logger       *logrus.Logger
 	alertManager AlertManager
+	// translator resolves user-facing message keys (CONST-046). Defaults
+	// to NoopTranslator (key-verbatim passthrough) so legacy assertions
+	// keep working until a consuming project wires a real translator via
+	// SetTranslator. Per CONST-051(B) this is decoupled injection, not a
+	// parent-tree reach.
+	translator i18n.Translator
 }
 
 type schedule struct {
@@ -111,7 +119,52 @@ func NewInMemoryContinuousEvaluator(evaluator LLMEvaluator, registry PromptRegis
 		registry:     registry,
 		alertManager: alertManager,
 		logger:       logger,
+		translator:   i18n.NoopTranslator{},
 	}
+}
+
+// SetTranslator wires the i18n translator used to render user-facing
+// run-comparison summary text. Passing a nil translator is a no-op (the
+// evaluator continues to use the NoopTranslator key-verbatim default
+// installed at construction). Safe to call concurrently with other
+// methods — guarded by the same RW mutex that protects runs / datasets.
+//
+// Per CONST-051(B), this is configuration injection — the LLMOps
+// submodule never reaches into a parent project to discover its
+// catalogue; the consuming project hands it in.
+func (e *InMemoryContinuousEvaluator) SetTranslator(t i18n.Translator) {
+	if t == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.translator = t
+}
+
+// tr returns the active translator, defaulting to NoopTranslator. Read
+// without locking is safe because SetTranslator only ever stores a
+// non-nil value and the field is assigned at construction.
+func (e *InMemoryContinuousEvaluator) tr() i18n.Translator {
+	if e.translator == nil {
+		return i18n.NoopTranslator{}
+	}
+	return e.translator
+}
+
+// renderSummary resolves a user-facing summary message through the
+// injected i18n.Translator. NoopTranslator returns the key verbatim;
+// when that happens we substitute the legacy English fallback so
+// long-standing string assertions against Summary (e.g. "No significant
+// changes") keep passing. A real translator wired by the consuming
+// project supplies the localised rendering and short-circuits the
+// fallback. Per CONST-046, no human-readable static literal is exposed
+// without going through this seam.
+func (e *InMemoryContinuousEvaluator) renderSummary(key string, params map[string]any, englishFallback string) string {
+	rendered := e.tr().T(key, params)
+	if rendered == key {
+		return englishFallback
+	}
+	return rendered
 }
 
 // SetResponder wires the real LLMResponder used by evaluateSample to
@@ -631,13 +684,30 @@ func (e *InMemoryContinuousEvaluator) CompareRuns(ctx context.Context, runID1, r
 		}
 	}
 
-	// Generate summary
-	if len(comparison.Regressions) > 0 {
-		comparison.Summary = fmt.Sprintf("Regressions in %d metrics", len(comparison.Regressions))
-	} else if len(comparison.Improvements) > 0 {
-		comparison.Summary = fmt.Sprintf("Improvements in %d metrics", len(comparison.Improvements))
-	} else {
-		comparison.Summary = "No significant changes"
+	// Generate summary — CONST-046: text resolved via the injected
+	// i18n.Translator. NoopTranslator (default) returns the key verbatim;
+	// renderSummaryKey then falls back to the legacy English literal so
+	// existing-string assertions keep passing. A real translator wired by
+	// the consuming project supplies the locale-correct rendering.
+	switch {
+	case len(comparison.Regressions) > 0:
+		comparison.Summary = e.renderSummary(
+			"llmops_run_comparison_regressions",
+			map[string]any{"count": len(comparison.Regressions)},
+			fmt.Sprintf("Regressions in %d metrics", len(comparison.Regressions)),
+		)
+	case len(comparison.Improvements) > 0:
+		comparison.Summary = e.renderSummary(
+			"llmops_run_comparison_improvements",
+			map[string]any{"count": len(comparison.Improvements)},
+			fmt.Sprintf("Improvements in %d metrics", len(comparison.Improvements)),
+		)
+	default:
+		comparison.Summary = e.renderSummary(
+			"llmops_run_comparison_no_change",
+			nil,
+			"No significant changes",
+		)
 	}
 
 	return comparison, nil

@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+
+	"digital.vasic.llmops/pkg/i18n"
 )
 
 // InMemoryExperimentManager implements ExperimentManager
@@ -20,6 +22,12 @@ type InMemoryExperimentManager struct {
 	assignments map[string]map[string]string          // exp -> user -> variant
 	mu          sync.RWMutex
 	logger      *logrus.Logger
+	// translator resolves user-facing recommendation text (CONST-046).
+	// Defaults to NoopTranslator (key-verbatim passthrough) so legacy
+	// assertions against the recommendation string keep working until a
+	// consuming project wires a real translator via SetTranslator. Per
+	// CONST-051(B) this is decoupled injection, not a parent-tree reach.
+	translator i18n.Translator
 }
 
 type metricSample struct {
@@ -37,7 +45,52 @@ func NewInMemoryExperimentManager(logger *logrus.Logger) *InMemoryExperimentMana
 		metrics:     make(map[string]map[string][]*metricSample),
 		assignments: make(map[string]map[string]string),
 		logger:      logger,
+		translator:  i18n.NoopTranslator{},
 	}
+}
+
+// SetTranslator wires the i18n translator used to render the
+// user-facing experiment recommendation text. Passing a nil translator
+// is a no-op (the manager continues to use the NoopTranslator
+// key-verbatim default installed at construction). Safe to call
+// concurrently with other methods — guarded by the same RW mutex that
+// protects experiments / metrics / assignments.
+//
+// Per CONST-051(B), this is configuration injection — the LLMOps
+// submodule never reaches into a parent project to discover its
+// catalogue; the consuming project hands it in.
+func (m *InMemoryExperimentManager) SetTranslator(t i18n.Translator) {
+	if t == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.translator = t
+}
+
+// tr returns the active translator, defaulting to NoopTranslator.
+func (m *InMemoryExperimentManager) tr() i18n.Translator {
+	if m.translator == nil {
+		return i18n.NoopTranslator{}
+	}
+	return m.translator
+}
+
+// renderRecommendation resolves a user-facing recommendation message
+// through the injected i18n.Translator. NoopTranslator returns the key
+// verbatim; when that happens we substitute the legacy English
+// fallback so long-standing string assertions against Recommendation
+// (e.g. "Continue experiment", "Deploy variant") keep passing. A real
+// translator wired by the consuming project supplies the localised
+// rendering and short-circuits the fallback. Per CONST-046, no
+// human-readable static literal is exposed without going through this
+// seam.
+func (m *InMemoryExperimentManager) renderRecommendation(key string, params map[string]any, englishFallback string) string {
+	rendered := m.tr().T(key, params)
+	if rendered == key {
+		return englishFallback
+	}
+	return rendered
 }
 
 // Create creates a new experiment
@@ -351,9 +404,21 @@ func (m *InMemoryExperimentManager) GetResults(ctx context.Context, experimentID
 
 	if result.Confidence >= 0.95 {
 		result.Winner = m.determineWinner(result)
-		result.Recommendation = fmt.Sprintf("Deploy variant %s with %.1f%% confidence", result.Winner, result.Confidence*100)
+		// CONST-046: recommendation text resolved via injected translator.
+		result.Recommendation = m.renderRecommendation(
+			"llmops_experiment_recommendation_deploy",
+			map[string]any{
+				"variant":    result.Winner,
+				"confidence": result.Confidence * 100,
+			},
+			fmt.Sprintf("Deploy variant %s with %.1f%% confidence", result.Winner, result.Confidence*100),
+		)
 	} else {
-		result.Recommendation = "Continue experiment - insufficient confidence"
+		result.Recommendation = m.renderRecommendation(
+			"llmops_experiment_recommendation_continue",
+			nil,
+			"Continue experiment - insufficient confidence",
+		)
 	}
 
 	return result, nil

@@ -1,0 +1,17 @@
+# LLMOps i18n bundle — English (default).
+#
+# Keys are prefixed `llmops_` to avoid collision with sibling submodule
+# catalogues that a consuming project (e.g. HelixCode) may merge into a
+# single bundle store. Per CONST-046 the consuming project's project-side
+# translator is the authority that fans out locale overrides; this
+# bundle is the canonical English source.
+#
+# Round-119 §11.4 — kickoff scope: experiment recommendations + run
+# comparison summary. Subsequent rounds widen coverage to integration
+# descriptions + prompt templates.
+
+llmops_experiment_recommendation_deploy: "Deploy variant {{variant}} with {{confidence}}% confidence"
+llmops_experiment_recommendation_continue: "Continue experiment - insufficient confidence"
+llmops_run_comparison_regressions: "Regressions in {{count}} metrics"
+llmops_run_comparison_improvements: "Improvements in {{count}} metrics"
+llmops_run_comparison_no_change: "No significant changes"
