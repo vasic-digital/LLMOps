@@ -1,0 +1,10 @@
+# LLMOps Challenge runner — English (default) locale fixture.
+# Round-290 §11.4 deep-doc + Challenge enrichment.
+header=== LLMOps anti-bluff Challenge (locale={{locale}}, mutate={{mutate}}) ==
+phase_prompt_registry_begin=phase: prompt registry round-trip
+phase_render_begin=phase: prompt rendering with variables
+phase_compare_begin=phase: prompt version comparison
+phase_i18n_begin=phase: i18n surface integrity
+pass_line=PASS: {{phase}}
+fail_line=FAIL: {{phase}} — cause: {{cause}}
+summary=Summary: PASS={{pass}} FAIL={{fail}}

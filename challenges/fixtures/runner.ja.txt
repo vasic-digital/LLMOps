@@ -1,0 +1,9 @@
+# LLMOps Challenge runner — Japanese locale fixture.
+header=== LLMOps アンチブラフ チャレンジ (ロケール={{locale}}, ミューテーション={{mutate}}) ==
+phase_prompt_registry_begin=フェーズ: プロンプトレジストリの往復
+phase_render_begin=フェーズ: 変数を伴うプロンプトレンダリング
+phase_compare_begin=フェーズ: プロンプトバージョン比較
+phase_i18n_begin=フェーズ: i18n サーフェスの整合性
+pass_line=合格: {{phase}}
+fail_line=不合格: {{phase}} — 原因: {{cause}}
+summary=要約: 合格={{pass}} 不合格={{fail}}

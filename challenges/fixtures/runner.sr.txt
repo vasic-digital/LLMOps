@@ -1,0 +1,9 @@
+# LLMOps Challenge runner — Serbian (Latin) locale fixture.
+header=== LLMOps anti-bluff izazov (lokal={{locale}}, mutacija={{mutate}}) ==
+phase_prompt_registry_begin=faza: povratni put kroz registar promptova
+phase_render_begin=faza: renderovanje prompta sa promenljivima
+phase_compare_begin=faza: poređenje verzija prompta
+phase_i18n_begin=faza: integritet i18n površine
+pass_line=PROŠLO: {{phase}}
+fail_line=PALO: {{phase}} — uzrok: {{cause}}
+summary=Sažetak: PROŠLO={{pass}} PALO={{fail}}

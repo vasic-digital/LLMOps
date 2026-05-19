@@ -1,0 +1,9 @@
+# LLMOps Challenge runner — Spanish locale fixture.
+header=== Desafío anti-bluff de LLMOps (locale={{locale}}, mutación={{mutate}}) ==
+phase_prompt_registry_begin=fase: round-trip del registro de prompts
+phase_render_begin=fase: renderizado de prompt con variables
+phase_compare_begin=fase: comparación de versiones de prompt
+phase_i18n_begin=fase: integridad de la superficie i18n
+pass_line=APROBADO: {{phase}}
+fail_line=FALLIDO: {{phase}} — causa: {{cause}}
+summary=Resumen: APROBADOS={{pass}} FALLIDOS={{fail}}

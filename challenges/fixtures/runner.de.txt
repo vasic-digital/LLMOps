@@ -1,0 +1,9 @@
+# LLMOps Challenge runner — German locale fixture.
+header=== LLMOps Anti-Bluff-Challenge (Sprache={{locale}}, Mutation={{mutate}}) ==
+phase_prompt_registry_begin=Phase: Prompt-Registry-Roundtrip
+phase_render_begin=Phase: Prompt-Rendering mit Variablen
+phase_compare_begin=Phase: Vergleich von Prompt-Versionen
+phase_i18n_begin=Phase: i18n-Oberflächenintegrität
+pass_line=BESTANDEN: {{phase}}
+fail_line=FEHLGESCHLAGEN: {{phase}} — Ursache: {{cause}}
+summary=Zusammenfassung: BESTANDEN={{pass}} FEHLGESCHLAGEN={{fail}}
