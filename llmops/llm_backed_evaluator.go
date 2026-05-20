@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+
+	"digital.vasic.llmops/pkg/i18n"
 )
 
 // LLMBackedEvaluator is a concrete LLMEvaluator implementation that scores
@@ -79,6 +82,17 @@ type LLMBackedEvaluator struct {
 	judgmentPromptTemplate string
 	defaultMetrics         []string
 	clampOnRangeError      bool
+
+	// translator resolves user-facing runtime-formatted judge-error
+	// message keys (CONST-046 / round 211 §11.4). Defaults to
+	// NoopTranslator (key-verbatim passthrough) so legacy assertions
+	// against the English error text keep passing until a consuming
+	// project wires a real translator via SetTranslator. Per
+	// CONST-051(B) this is decoupled injection, not a parent-tree
+	// reach. Guarded by trMu so concurrent SetTranslator / Evaluate
+	// calls are race-free per the evaluator's concurrency contract.
+	trMu       sync.RWMutex
+	translator i18n.Translator
 }
 
 // LLMBackedEvaluatorConfig is the constructor input for NewLLMBackedEvaluator.
@@ -246,7 +260,52 @@ func NewLLMBackedEvaluator(cfg LLMBackedEvaluatorConfig) (*LLMBackedEvaluator, e
 		judgmentPromptTemplate: tmpl,
 		defaultMetrics:         metrics,
 		clampOnRangeError:      cfg.ClampOnRangeError,
+		translator:             i18n.NoopTranslator{},
 	}, nil
+}
+
+// SetTranslator wires the i18n translator used to render runtime
+// user-facing judge-error message bodies (CONST-046 / round 211
+// §11.4). Passing a nil translator is a no-op (the evaluator continues
+// to use the NoopTranslator key-verbatim default installed at
+// construction). Safe to call concurrently with Evaluate.
+//
+// Per CONST-051(B), this is configuration injection — the LLMOps
+// submodule never reaches into a parent project to discover its
+// catalogue; the consuming project hands it in.
+func (e *LLMBackedEvaluator) SetTranslator(t i18n.Translator) {
+	if t == nil {
+		return
+	}
+	e.trMu.Lock()
+	defer e.trMu.Unlock()
+	e.translator = t
+}
+
+// tr returns the active translator, defaulting to NoopTranslator.
+func (e *LLMBackedEvaluator) tr() i18n.Translator {
+	e.trMu.RLock()
+	defer e.trMu.RUnlock()
+	if e.translator == nil {
+		return i18n.NoopTranslator{}
+	}
+	return e.translator
+}
+
+// renderError resolves a user-facing judge-error message body through
+// the injected i18n.Translator. NoopTranslator returns the key
+// verbatim; when that happens we substitute the legacy English
+// fallback so long-standing string assertions against error bodies
+// keep passing. A real translator wired by the consuming project
+// supplies the localised rendering and short-circuits the fallback.
+// Per CONST-046, no human-readable static literal is exposed without
+// going through this seam.
+func (e *LLMBackedEvaluator) renderError(key string, params map[string]any, englishFallback string) string {
+	rendered := e.tr().T(key, params)
+	if rendered == key {
+		return englishFallback
+	}
+	return rendered
 }
 
 // Evaluate satisfies the LLMEvaluator interface contract. It dispatches
@@ -275,7 +334,14 @@ func NewLLMBackedEvaluator(cfg LLMBackedEvaluatorConfig) (*LLMBackedEvaluator, e
 //     deferred to round 82+ if operator demand emerges.)
 func (e *LLMBackedEvaluator) Evaluate(ctx context.Context, prompt, response, expected string, metrics []string) (map[string]float64, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("llmops: LLMBackedEvaluator: context cancelled before judge dispatch: %w", err)
+		// CONST-046: prefix text via injected translator with legacy
+		// English fallback; %w wrap preserves errors.Is(ctx.Err())
+		// sentinel chain. The "{{cause}}" param is the cause text the
+		// caller will see appended verbatim by fmt.Errorf's %w.
+		prefix := e.renderError("llmops_llm_evaluator_ctx_cancelled",
+			map[string]any{"cause": err.Error()},
+			"llmops: LLMBackedEvaluator: context cancelled before judge dispatch")
+		return nil, fmt.Errorf("%s: %w", prefix, err)
 	}
 
 	useMetrics := metrics
@@ -287,7 +353,10 @@ func (e *LLMBackedEvaluator) Evaluate(ctx context.Context, prompt, response, exp
 
 	rawJudgment, err := e.responder.Generate(ctx, judgmentPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("llmops: LLMBackedEvaluator: judge LLM dispatch failed: %w", err)
+		prefix := e.renderError("llmops_llm_evaluator_judge_dispatch_failed",
+			map[string]any{"cause": err.Error()},
+			"llmops: LLMBackedEvaluator: judge LLM dispatch failed")
+		return nil, fmt.Errorf("%s: %w", prefix, err)
 	}
 
 	scores, err := e.parseScores(rawJudgment)
@@ -305,7 +374,14 @@ func (e *LLMBackedEvaluator) Evaluate(ctx context.Context, prompt, response, exp
 		if len(excerpt) > maxExcerpt {
 			excerpt = excerpt[:maxExcerpt] + "...(truncated)"
 		}
-		return nil, fmt.Errorf("%w: judge response excerpt: %q", ErrLLMBackedEvaluatorResponseUnparseable, excerpt)
+		// CONST-046: excerpt label via translator; fallback preserves
+		// the legacy %q-style assertion text. Quoted excerpt is %q so
+		// embedded quotes / control chars stay escaped under both
+		// rendered + fallback paths.
+		msg := e.renderError("llmops_llm_evaluator_judge_excerpt",
+			map[string]any{"excerpt": excerpt},
+			fmt.Sprintf("judge response excerpt: %q", excerpt))
+		return nil, fmt.Errorf("%w: %s", ErrLLMBackedEvaluatorResponseUnparseable, msg)
 	}
 
 	return scores, nil
@@ -365,8 +441,14 @@ func (e *LLMBackedEvaluator) parseScores(judgment string) (map[string]float64, e
 
 		if score < 0.0 || score > 1.0 {
 			if !e.clampOnRangeError {
-				return nil, fmt.Errorf("%w: metric %q got score %g (expected [0, 1])",
-					ErrLLMBackedEvaluatorScoreOutOfRange, metric, score)
+				// CONST-046: out-of-range body via translator; fallback
+				// preserves the legacy "metric %q got score %g
+				// (expected [0, 1])" assertion text. %q on metric keeps
+				// embedded quotes escaped under both paths.
+				msg := e.renderError("llmops_llm_evaluator_metric_out_of_range",
+					map[string]any{"metric": metric, "score": score},
+					fmt.Sprintf("metric %q got score %g (expected [0, 1])", metric, score))
+				return nil, fmt.Errorf("%w: %s", ErrLLMBackedEvaluatorScoreOutOfRange, msg)
 			}
 			// Opt-in clamp branch.
 			if score < 0 {

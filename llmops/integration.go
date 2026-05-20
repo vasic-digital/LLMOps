@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"digital.vasic.llmops/pkg/i18n"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
@@ -22,6 +23,12 @@ type LLMOpsSystem struct {
 	config              *LLMOpsConfig
 	logger              *logrus.Logger
 	mu                  sync.RWMutex
+	// translator resolves user-facing experiment-description text
+	// (CONST-046). Defaults to NoopTranslator (key-verbatim passthrough)
+	// so legacy Experiment.Description assertions keep working until a
+	// consuming project wires a real translator via SetTranslator. Per
+	// CONST-051(B) this is decoupled injection, not a parent-tree reach.
+	translator i18n.Translator
 }
 
 // LLMOpsConfig configuration for LLMOps
@@ -104,9 +111,56 @@ func NewLLMOpsSystem(config *LLMOpsConfig, logger *logrus.Logger) *LLMOpsSystem 
 	}
 
 	return &LLMOpsSystem{
-		config: config,
-		logger: logger,
+		config:     config,
+		logger:     logger,
+		translator: i18n.NoopTranslator{},
 	}
+}
+
+// SetTranslator wires the i18n translator used to render user-facing
+// experiment-description text (Experiment.Description). Passing a nil
+// translator is a no-op (the system continues to use the NoopTranslator
+// key-verbatim default installed at construction). Safe to call
+// concurrently with other methods — guarded by the same RW mutex that
+// protects component wiring.
+//
+// Per CONST-051(B), this is configuration injection — the LLMOps
+// submodule never reaches into a parent project to discover its
+// catalogue; the consuming project hands it in.
+func (s *LLMOpsSystem) SetTranslator(t i18n.Translator) {
+	if t == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.translator = t
+}
+
+// tr returns the active translator, defaulting to NoopTranslator. Read
+// under the RW mutex's read lock to stay race-free with SetTranslator.
+func (s *LLMOpsSystem) tr() i18n.Translator {
+	s.mu.RLock()
+	t := s.translator
+	s.mu.RUnlock()
+	if t == nil {
+		return i18n.NoopTranslator{}
+	}
+	return t
+}
+
+// renderDescription resolves a user-facing experiment-description
+// message through the injected i18n.Translator. NoopTranslator returns
+// the key verbatim; when that happens we substitute the legacy English
+// fallback so long-standing Experiment.Description assertions keep
+// passing. A real translator wired by the consuming project supplies
+// the localised rendering. Per CONST-046, no human-readable static
+// literal is exposed without going through this seam.
+func (s *LLMOpsSystem) renderDescription(key string, params map[string]any, englishFallback string) string {
+	rendered := s.tr().T(key, params)
+	if rendered == key {
+		return englishFallback
+	}
+	return rendered
 }
 
 // Initialize sets up all components
@@ -183,11 +237,21 @@ func (s *LLMOpsSystem) CreatePromptExperiment(ctx context.Context, name string, 
 		return nil, fmt.Errorf("failed to create treatment prompt: %w", err)
 	}
 
-	// Create experiment
+	// Create experiment. CONST-046: the user-facing description is
+	// resolved via the injected i18n.Translator (renderDescription seam);
+	// NoopTranslator falls back to the legacy English literal so existing
+	// Experiment.Description assertions keep passing.
 	exp := &Experiment{
-		ID:          uuid.New().String(),
-		Name:        name,
-		Description: fmt.Sprintf("A/B test: %s vs %s", controlPrompt.Name, treatmentPrompt.Name),
+		ID:   uuid.New().String(),
+		Name: name,
+		Description: s.renderDescription(
+			"llmops_experiment_prompt_ab_description",
+			map[string]any{
+				"control":   controlPrompt.Name,
+				"treatment": treatmentPrompt.Name,
+			},
+			fmt.Sprintf("A/B test: %s vs %s", controlPrompt.Name, treatmentPrompt.Name),
+		),
 		Variants: []*Variant{
 			{
 				ID:            uuid.New().String(),
@@ -248,10 +312,17 @@ func (s *LLMOpsSystem) CreateModelExperiment(ctx context.Context, name string, m
 		trafficSplit[variants[i].ID] = splitPct
 	}
 
+	// CONST-046: the user-facing description is resolved via the injected
+	// i18n.Translator (renderDescription seam); NoopTranslator falls back
+	// to the legacy English literal so existing assertions keep passing.
 	exp := &Experiment{
-		ID:           uuid.New().String(),
-		Name:         name,
-		Description:  fmt.Sprintf("Model comparison: %v", models),
+		ID:   uuid.New().String(),
+		Name: name,
+		Description: s.renderDescription(
+			"llmops_experiment_model_comparison_description",
+			map[string]any{"models": fmt.Sprintf("%v", models)},
+			fmt.Sprintf("Model comparison: %v", models),
+		),
 		Variants:     variants,
 		TrafficSplit: trafficSplit,
 		Metrics:      []string{"quality", "latency", "cost"},

@@ -15,3 +15,33 @@ llmops_experiment_recommendation_continue: "Continue experiment - insufficient c
 llmops_run_comparison_regressions: "Regressions in {{count}} metrics"
 llmops_run_comparison_improvements: "Improvements in {{count}} metrics"
 llmops_run_comparison_no_change: "No significant changes"
+
+# Round-211 §11.4 — round 2 scope: HTTPResponder runtime error formatting
+# (6 keys) + LLMBackedEvaluator runtime error formatting (4 keys). Each
+# key carries the params it formats so a locale override can re-order or
+# omit them. The English text below MUST stay aligned with the legacy
+# fmt.Errorf body so existing fallback assertions keep passing under
+# NoopTranslator (CONST-046 + Article XI §11.9 anti-bluff posture).
+llmops_responder_marshal_request_failed: "marshal request body: {{cause}}"
+llmops_responder_build_request_failed: "build request for {{url}}: {{cause}}"
+llmops_responder_post_failed: "POST {{url}}: {{cause}}"
+llmops_responder_read_body_failed: "read response body from {{url}} (status {{status}}): {{cause}}"
+llmops_responder_zero_choices: "response from {{url}} contained zero choices"
+llmops_responder_empty_content: "response from {{url}} had choices[0].message.content == \"\""
+llmops_llm_evaluator_ctx_cancelled: "llmops: LLMBackedEvaluator: context cancelled before judge dispatch"
+llmops_llm_evaluator_judge_dispatch_failed: "llmops: LLMBackedEvaluator: judge LLM dispatch failed"
+llmops_llm_evaluator_judge_excerpt: "judge response excerpt: {{excerpt}}"
+llmops_llm_evaluator_metric_out_of_range: "metric {{metric}} got score {{score}} (expected [0, 1])"
+
+# Round-394 §11.4 — round 8 scope: regression-alert messages surfaced to
+# end users via Alert.Message (continuous evaluator) + A/B experiment
+# Description surfaced via Experiment.Description (LLMOpsSystem). The
+# English text below MUST stay byte-aligned with the legacy fmt.Sprintf
+# body so existing Alert.Message / Experiment.Description string
+# assertions keep passing under NoopTranslator (CONST-046 + Article XI
+# §11.9 anti-bluff posture). Params carry every formatted value so a
+# locale override can re-order or omit them.
+llmops_alert_pass_rate_regression: "Pass rate regression: {{previous}}% -> {{current}}%"
+llmops_alert_metric_regression: "Metric {{metric}} regression: {{previous}} -> {{current}}"
+llmops_experiment_prompt_ab_description: "A/B test: {{control}} vs {{treatment}}"
+llmops_experiment_model_comparison_description: "Model comparison: {{models}}"

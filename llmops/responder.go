@@ -9,7 +9,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"digital.vasic.llmops/pkg/i18n"
 )
 
 // HTTPResponder is a concrete LLMResponder implementation that dispatches
@@ -50,6 +53,17 @@ type HTTPResponder struct {
 	apiKey     string
 	timeout    time.Duration
 	httpClient *http.Client
+
+	// translator resolves user-facing runtime-formatted error message
+	// keys (CONST-046 / round 211 §11.4). Defaults to NoopTranslator
+	// (key-verbatim passthrough) so legacy assertions against the
+	// English error text keep passing until a consuming project wires a
+	// real translator via SetTranslator. Per CONST-051(B) this is
+	// decoupled injection, not a parent-tree reach. Guarded by trMu so
+	// concurrent SetTranslator / Generate calls are race-free per
+	// HTTPResponder's documented concurrency contract.
+	trMu       sync.RWMutex
+	translator i18n.Translator
 }
 
 // HTTPResponderConfig is the constructor input for NewHTTPResponder.
@@ -168,7 +182,52 @@ func NewHTTPResponder(cfg HTTPResponderConfig) (*HTTPResponder, error) {
 		apiKey:     cfg.APIKey,
 		timeout:    timeout,
 		httpClient: client,
+		translator: i18n.NoopTranslator{},
 	}, nil
+}
+
+// SetTranslator wires the i18n translator used to render runtime
+// user-facing error message bodies (CONST-046 / round 211 §11.4).
+// Passing a nil translator is a no-op (the responder continues to use
+// the NoopTranslator key-verbatim default installed at construction).
+// Safe to call concurrently with Generate.
+//
+// Per CONST-051(B), this is configuration injection — the LLMOps
+// submodule never reaches into a parent project to discover its
+// catalogue; the consuming project hands it in.
+func (r *HTTPResponder) SetTranslator(t i18n.Translator) {
+	if t == nil {
+		return
+	}
+	r.trMu.Lock()
+	defer r.trMu.Unlock()
+	r.translator = t
+}
+
+// tr returns the active translator, defaulting to NoopTranslator.
+func (r *HTTPResponder) tr() i18n.Translator {
+	r.trMu.RLock()
+	defer r.trMu.RUnlock()
+	if r.translator == nil {
+		return i18n.NoopTranslator{}
+	}
+	return r.translator
+}
+
+// renderError resolves a user-facing error message body through the
+// injected i18n.Translator. NoopTranslator returns the key verbatim;
+// when that happens we substitute the legacy English fallback so
+// long-standing string assertions against error bodies keep passing.
+// A real translator wired by the consuming project supplies the
+// localised rendering and short-circuits the fallback. Per CONST-046,
+// no human-readable static literal is exposed without going through
+// this seam.
+func (r *HTTPResponder) renderError(key string, params map[string]any, englishFallback string) string {
+	rendered := r.tr().T(key, params)
+	if rendered == key {
+		return englishFallback
+	}
+	return rendered
 }
 
 // chatCompletionsRequest is the wire shape POSTed to the endpoint. Only
@@ -236,13 +295,21 @@ func (r *HTTPResponder) Generate(ctx context.Context, prompt string) (string, er
 		// chan / func / cyclic types), but wrap defensively rather
 		// than panic so the contract stays "every failure surfaces as
 		// a sentinel-wrapped error".
-		return "", fmt.Errorf("%w: marshal request body: %v", ErrHTTPResponderRequestFailed, err)
+		// CONST-046: body text via injected translator with legacy
+		// English fallback so existing %v formatting cause stays valid.
+		msg := r.renderError("llmops_responder_marshal_request_failed",
+			map[string]any{"cause": err.Error()},
+			fmt.Sprintf("marshal request body: %v", err))
+		return "", fmt.Errorf("%w: %s", ErrHTTPResponderRequestFailed, msg)
 	}
 
 	url := r.endpoint + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("%w: build request for %s: %v", ErrHTTPResponderRequestFailed, url, err)
+		msg := r.renderError("llmops_responder_build_request_failed",
+			map[string]any{"url": url, "cause": err.Error()},
+			fmt.Sprintf("build request for %s: %v", url, err))
+		return "", fmt.Errorf("%w: %s", ErrHTTPResponderRequestFailed, msg)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -256,7 +323,10 @@ func (r *HTTPResponder) Generate(ctx context.Context, prompt string) (string, er
 	if err != nil {
 		// Transport-layer failure: DNS, TCP, TLS, ctx-cancel,
 		// timeout. Wrap with the endpoint URL (no APIKey).
-		return "", fmt.Errorf("%w: POST %s: %v", ErrHTTPResponderRequestFailed, url, err)
+		msg := r.renderError("llmops_responder_post_failed",
+			map[string]any{"url": url, "cause": err.Error()},
+			fmt.Sprintf("POST %s: %v", url, err))
+		return "", fmt.Errorf("%w: %s", ErrHTTPResponderRequestFailed, msg)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -265,8 +335,10 @@ func (r *HTTPResponder) Generate(ctx context.Context, prompt string) (string, er
 	// model-not-found, auth-rejected, rate-limited, etc.).
 	respBytes, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return "", fmt.Errorf("%w: read response body from %s (status %d): %v",
-			ErrHTTPResponderRequestFailed, url, resp.StatusCode, readErr)
+		msg := r.renderError("llmops_responder_read_body_failed",
+			map[string]any{"url": url, "status": resp.StatusCode, "cause": readErr.Error()},
+			fmt.Sprintf("read response body from %s (status %d): %v", url, resp.StatusCode, readErr))
+		return "", fmt.Errorf("%w: %s", ErrHTTPResponderRequestFailed, msg)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -296,14 +368,18 @@ func (r *HTTPResponder) Generate(ctx context.Context, prompt string) (string, er
 	}
 
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("%w: response from %s contained zero choices",
-			ErrHTTPResponderResponseInvalid, url)
+		msg := r.renderError("llmops_responder_zero_choices",
+			map[string]any{"url": url},
+			fmt.Sprintf("response from %s contained zero choices", url))
+		return "", fmt.Errorf("%w: %s", ErrHTTPResponderResponseInvalid, msg)
 	}
 
 	content := parsed.Choices[0].Message.Content
 	if content == "" {
-		return "", fmt.Errorf("%w: response from %s had choices[0].message.content == \"\"",
-			ErrHTTPResponderResponseInvalid, url)
+		msg := r.renderError("llmops_responder_empty_content",
+			map[string]any{"url": url},
+			fmt.Sprintf("response from %s had choices[0].message.content == \"\"", url))
+		return "", fmt.Errorf("%w: %s", ErrHTTPResponderResponseInvalid, msg)
 	}
 
 	return content, nil

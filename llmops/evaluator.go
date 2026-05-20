@@ -473,10 +473,23 @@ func (e *InMemoryContinuousEvaluator) checkForRegressions(ctx context.Context, r
 	passRateChange := runPassRate - prevPassRate
 	if passRateChange < -0.05 { // 5% regression
 		alert := &Alert{
-			ID:          uuid.New().String(),
-			Type:        AlertTypeRegression,
-			Severity:    AlertSeverityWarning,
-			Message:     fmt.Sprintf("Pass rate regression: %.1f%% -> %.1f%%", prevPassRate*100, runPassRate*100),
+			ID:   uuid.New().String(),
+			Type: AlertTypeRegression,
+			Severity: AlertSeverityWarning,
+			// CONST-046: regression-alert text resolved via the injected
+			// i18n.Translator. NoopTranslator (default) returns the key
+			// verbatim and renderSummary falls back to the legacy English
+			// literal so existing Alert.Message assertions keep passing.
+			// A real translator wired by the consuming project supplies
+			// the locale-correct rendering.
+			Message: e.renderSummary(
+				"llmops_alert_pass_rate_regression",
+				map[string]any{
+					"previous": fmt.Sprintf("%.1f", prevPassRate*100),
+					"current":  fmt.Sprintf("%.1f", runPassRate*100),
+				},
+				fmt.Sprintf("Pass rate regression: %.1f%% -> %.1f%%", prevPassRate*100, runPassRate*100),
+			),
 			Source:      "evaluation",
 			SourceID:    run.ID,
 			Threshold:   -0.05,
@@ -497,10 +510,20 @@ func (e *InMemoryContinuousEvaluator) checkForRegressions(ctx context.Context, r
 			change := score - prevScore
 			if change < -0.1 {
 				alert := &Alert{
-					ID:          uuid.New().String(),
-					Type:        AlertTypeRegression,
-					Severity:    AlertSeverityWarning,
-					Message:     fmt.Sprintf("Metric %s regression: %.2f -> %.2f", metric, prevScore, score),
+					ID:   uuid.New().String(),
+					Type: AlertTypeRegression,
+					Severity: AlertSeverityWarning,
+					// CONST-046: per-metric regression text resolved via
+					// the injected i18n.Translator (renderSummary seam).
+					Message: e.renderSummary(
+						"llmops_alert_metric_regression",
+						map[string]any{
+							"metric":   metric,
+							"previous": fmt.Sprintf("%.2f", prevScore),
+							"current":  fmt.Sprintf("%.2f", score),
+						},
+						fmt.Sprintf("Metric %s regression: %.2f -> %.2f", metric, prevScore, score),
+					),
 					Source:      "evaluation",
 					SourceID:    run.ID,
 					Metric:      metric,
