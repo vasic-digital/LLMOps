@@ -356,32 +356,39 @@ func TestLLMOpsSystem_CreatePromptExperiment_ControlPromptCreateFails(t *testing
 	sys := newInitializedSystem(t)
 	ctx := context.Background()
 
-	// Create the control prompt first to trigger duplicate error
-	controlPre := &PromptVersion{Name: "dup-prompt", Version: "1.0", Content: "Already exists"}
-	require.NoError(t, sys.GetPromptRegistry().Create(ctx, controlPre))
-
-	control := &PromptVersion{Name: "dup-prompt", Version: "1.0", Content: "Duplicate control"}
+	// CreatePromptExperiment is idempotent on prompt registration (commit
+	// bb53c38): a duplicate at the SAME (name,version) is tolerated as a
+	// no-op so callers can pre-register prompts for verification. The
+	// genuine non-tolerated failure path is a structurally-invalid prompt
+	// — here an empty Content, which the registry rejects with
+	// "prompt content is required". The production code wraps that error
+	// with a "control prompt" prefix; this test certifies that contract.
+	control := &PromptVersion{Name: "bad-control", Version: "1.0", Content: ""}
 	treatment := &PromptVersion{Name: "treat-ok", Version: "1.0", Content: "Treatment"}
 
 	_, err := sys.CreatePromptExperiment(ctx, "fail-test", control, treatment, 0.5)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "control prompt")
+	assert.Contains(t, err.Error(), "prompt content is required")
 }
 
 func TestLLMOpsSystem_CreatePromptExperiment_TreatmentPromptCreateFails(t *testing.T) {
 	sys := newInitializedSystem(t)
 	ctx := context.Background()
 
-	// Pre-create the treatment to trigger duplicate error
-	treatPre := &PromptVersion{Name: "dup-treat", Version: "1.0", Content: "Already exists"}
-	require.NoError(t, sys.GetPromptRegistry().Create(ctx, treatPre))
-
+	// Mirror of the control-prompt case: the genuine non-tolerated
+	// treatment-prompt failure is a structurally-invalid prompt (empty
+	// Content). CreatePromptExperiment wraps the registry error with a
+	// "treatment prompt" prefix; this test certifies that contract.
+	// A same-(name,version) duplicate would NOT fail here — it is
+	// tolerated by the idempotent registration path (commit bb53c38).
 	control := &PromptVersion{Name: "ctrl-ok", Version: "1.0", Content: "Control"}
-	treatment := &PromptVersion{Name: "dup-treat", Version: "1.0", Content: "Duplicate treatment"}
+	treatment := &PromptVersion{Name: "bad-treat", Version: "1.0", Content: ""}
 
 	_, err := sys.CreatePromptExperiment(ctx, "fail-test", control, treatment, 0.5)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "treatment prompt")
+	assert.Contains(t, err.Error(), "prompt content is required")
 }
 
 // --- CreateModelExperiment tests ---
