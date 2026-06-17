@@ -1,0 +1,8 @@
+# helix-deps.yaml — llm_ops Submodule-Dependency-Manifest (HelixConstitution §11.4.31)
+# Catalogue-Check (§11.4.74): inspected go.mod; own-org deps: none.
+schema_version: 1
+deps: []
+transitive_handling:
+  recursive: true
+  conflict_resolution: operator-required
+language_specific_subtree: false
